@@ -1,0 +1,82 @@
+#!/usr/bin/env escript
+%%
+%% ct_auto_run
+%% @copyright Daniel Abrahamsson, 2012
+%%
+
+%% Seems like erlang does not handle include files properly
+-include_lib("kernel/include/file.hrl").
+
+main([Path|RunCommand]) ->
+    case filelib:is_dir(Path) of
+        true -> start(Path, string:join(RunCommand, " "));
+        false -> io:format("~p is not a directory.~n", [Path])
+    end;
+main(_) ->
+    io:format("Usage:~nct_auto_run <app_path> <run_command>~n").
+
+start(Path, RunCommand) ->
+    % Collect suites
+    Suites = collect_suites(Path),
+    % Collect modules
+    % Run initial test with all suites
+    SuiteFiles = [Suite || {Suite, _} <- Suites],
+    run_suites(RunCommand, SuiteFiles),
+    % Go into loop
+    loop(RunCommand, Suites).
+
+loop(RunCommand, Suites) ->
+    % Check for changed modules or suites
+    {ModifiedSuites, Suites2} = modified_suites(Suites),
+    % Re-run affected suites
+    run_suites(RunCommand, ModifiedSuites),
+    sleep(30000),
+    loop(RunCommand, Suites2).
+
+run_suites(_, []) ->
+    ok; % Nothing to do...
+run_suites(RunCommand, Suites) ->
+    FullCommand = RunCommand ++ " " ++ string:join(Suites, " "),
+    Port = open_port({spawn, FullCommand}, [stream, exit_status]),
+    report_test_run_progress(Port).
+
+report_test_run_progress(Port) ->
+    receive
+        {Port, {data, Data}} ->
+            io:format("~s", [Data]),
+            report_test_run_progress(Port);
+        {Port, {exit_status, N}} ->
+            io:format("Test run exited with status ~p~n", [N]);
+        U ->
+            io:format("report_test_run_progress: Unexpected message ~p~n", [U])
+    end.
+
+modified_suites(Suites) ->
+    UpdateSuiteInfo = fun(A, B) -> update_suite_info(A, B) end,
+    lists:foldl(UpdateSuiteInfo, {[], []}, Suites).
+
+update_suite_info({Suite, MTime}=SI, {Modified, AllSuites}) ->
+    case mtime(Suite) of
+        NTime when NTime > MTime ->
+            {[Suite|Modified], [{Suite, NTime}|AllSuites]};
+        _ ->
+            {Modified, [SI|AllSuites]}
+    end.
+
+sleep(Time) ->
+    receive
+    after Time ->
+      ok
+    end.
+
+collect_suites(Path) ->
+    AddSuite = fun(A, B) -> add_suite(A, B) end,
+    filelib:fold_files(Path, "_SUITE.erl$", true, AddSuite, []).
+
+add_suite(SuiteFile, Suites) ->
+    SuiteInfo = {SuiteFile, mtime(SuiteFile)},
+    [SuiteInfo|Suites].
+
+mtime(File) ->
+    {ok, FileInfo} = file:read_file_info(File), % R14B compatibility
+    FileInfo#file_info.mtime.

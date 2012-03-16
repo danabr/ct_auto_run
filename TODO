@@ -1,0 +1,16 @@
+*  5 inotify
+*  3 automatic detection which modules a test suite is dependent on.
+*  2 -test_source([Mods]) attribute parsing
+*  3 Re-run affected suites if module changes
+....
+  13 pt TODO
+
+-----
+*  1 Run all with custom command
+*  2 Re-run if test suite changes
+....
+   3 pt DONE
+
+-----
+    3/16 progress
+

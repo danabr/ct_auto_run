@@ -1,0 +1,25 @@
+ct_auto_run <top_dir> <run_command>
+-----------
+Automatically runs test suites when the source files they depend on (or the
+testsuites themselfes) have changed.
+
+ct_auto_run will try to infer what modules a test suite depends on. However,
+in case it is not able to do so, you can specify a test_source attribute with
+the modules to watch like this:
+-test_source([mod1, mod2]).
+
+The command takes two parameters, topdir and run_command:
+  top_dir is the top directory under which both test suites and source files
+  can be found. This is usually an application top directory.
+
+  run_command is the actual command used to run the tests. ct_auto_run will
+  append any suites to run as arguments to this command.
+
+Example:
+ct_auto_run /home/myname/dev/erlang/my_app ct_run -config my.config -suite
+
+Suppose that my_app contains the files src/cool.erl and test/cool_SUITE.erl.
+ct_run_all will run cool_SUITE whenever cool.erl changes.
+
+Current status:
+See TODO to see what is done and what is still to be done.
