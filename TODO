@@ -1,19 +1,19 @@
 *  5 inotify
-*  2 -test_source([Mods]) attribute parsing
 *  1 Detect new modules
 *  1 Detect new suites
 *  1 Handle suite and module removal
 ....
-  10 pt TODO
+   9 pt TODO
 
 -----
 *  1 Run all with custom command
 *  2 Re-run if test suite changes
 *  3 Re-run affected suites if module changes
 *  3 automatic detection which modules a test suite is dependent on.
+*  2 -test_source([Mods]) attribute parsing
 ....
-   9 pt DONE
+   11 pt DONE
 
 -----
-    9/19 progress
+   11/19 progress
 

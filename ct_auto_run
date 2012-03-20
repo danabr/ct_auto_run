@@ -137,7 +137,8 @@ dependencies(SuiteFile) ->
 parse_dependencies(Forms) ->
     lists:usort(lists:flatten(deps(Forms))).
 
-%% Calls
+deps({attribute, _, test_source, Deps}) ->
+    Deps;
 deps({call, _, {remote,_,{atom,_,Mod}, _}, Args})->
     [Mod|deps(Args)];
 % Catch all
@@ -152,7 +153,5 @@ get_forms(Epp) ->
     case epp:parse_erl_form(Epp) of
         {eof, _} -> [];
         {ok, Form} -> [Form|get_forms(Epp)];
-        {error, ErrorInfo} ->
-            io:format("ERROR:~p~n", [ErrorInfo]),
-            get_forms(Epp)
+        {error, ErrorInfo} -> get_forms(Epp) % Include file errors, etc
     end.
