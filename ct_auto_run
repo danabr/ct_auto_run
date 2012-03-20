@@ -4,8 +4,15 @@
 %% @copyright Daniel Abrahamsson, 2012
 %%
 
-%% Seems like erlang does not handle include files properly
 -include_lib("kernel/include/file.hrl").
+
+-record(suite, {path,
+                mtime,
+                dependencies=[]}).
+        
+-record(module, {name,
+                path,
+                mtime}).
 
 main([Path|RunCommand]) ->
     case filelib:is_dir(Path) of
@@ -19,19 +26,24 @@ start(Path, RunCommand) ->
     % Collect suites
     Suites = collect_suites(Path),
     % Collect modules
+    Modules = collect_modules(Path),
     % Run initial test with all suites
-    SuiteFiles = [Suite || {Suite, _} <- Suites],
+    SuiteFiles = [P || #suite{path=P} <- Suites],
     run_suites(RunCommand, SuiteFiles),
     % Go into loop
-    loop(RunCommand, Suites).
+    loop(RunCommand, Modules, Suites).
 
-loop(RunCommand, Suites) ->
+loop(RunCommand, Modules, Suites) ->
     % Check for changed modules or suites
-    {ModifiedSuites, Suites2} = modified_suites(Suites),
+    {SuitesToRun, UpdatedMods, UpdatedSuites} = suites_to_run(Modules, Suites),
     % Re-run affected suites
-    run_suites(RunCommand, ModifiedSuites),
-    sleep(30000),
-    loop(RunCommand, Suites2).
+    case SuitesToRun of
+        [] ->
+            sleep(30000);
+        _ ->
+            run_suites(RunCommand, SuitesToRun)
+    end,
+    loop(RunCommand, UpdatedMods, UpdatedSuites).
 
 run_suites(_, []) ->
     ok; % Nothing to do...
@@ -51,17 +63,64 @@ report_test_run_progress(Port) ->
             io:format("report_test_run_progress: Unexpected message ~p~n", [U])
     end.
 
+suites_to_run(Modules, Suites) ->
+    {ModifiedSuites, Suites2} = modified_suites(Suites),
+    {ModifiedMods, Mods2} = modified_modules(Modules),
+    ReRun = lists:usort(ModifiedSuites++suites_to_rerun(ModifiedMods, Suites2)),
+    {ReRun, Mods2, Suites2}.
+
 modified_suites(Suites) ->
     UpdateSuiteInfo = fun(A, B) -> update_suite_info(A, B) end,
     lists:foldl(UpdateSuiteInfo, {[], []}, Suites).
 
-update_suite_info({Suite, MTime}=SI, {Modified, AllSuites}) ->
-    case mtime(Suite) of
+update_suite_info(#suite{path=Path, mtime=MTime}=S, {Modified, AllSuites}) ->
+    case mtime(Path) of
         NTime when NTime > MTime ->
-            {[Suite|Modified], [{Suite, NTime}|AllSuites]};
+            Suite2 = S#suite{mtime=NTime, dependencies=dependencies(Path)},
+            {[Path|Modified], [Suite2|AllSuites]};
         _ ->
-            {Modified, [SI|AllSuites]}
+            {Modified, [S|AllSuites]}
     end.
+
+modified_modules(Modules) ->
+    UpdateModInfo = fun(A, B) -> update_module_info(A, B) end,
+    lists:foldl(UpdateModInfo, {[], []}, Modules).
+
+update_module_info(#module{name=Name, mtime=MTime}=M, {Modified, AllMods}) ->
+    case mtime(M#module.path) of
+        NTime when NTime > MTime ->
+            {[Name|Modified], [M#module{mtime=NTime}|AllMods]};
+        _ ->
+            {Modified, [M|AllMods]}
+    end.
+
+suites_to_rerun(ModNames, Suites) ->
+    DependsOn = fun(D) -> lists:member(D, ModNames) end,
+    [Path || #suite{path=Path, dependencies=Deps} <- Suites,
+              lists:any(DependsOn, Deps)].
+
+collect_suites(Path) ->
+    AddSuite = fun(A, B) -> add_suite(A, B) end,
+    filelib:fold_files(Path, "_SUITE.erl$", true, AddSuite, []).
+
+add_suite(SuiteFile, Suites) ->
+    MTime = mtime(SuiteFile),
+    Deps = dependencies(SuiteFile),
+    SuiteInfo = #suite{path=SuiteFile, mtime=MTime, dependencies=Deps},
+    [SuiteInfo|Suites].
+
+collect_modules(Path) ->
+    AddMod = fun(A, B) -> add_module(A, B) end,
+    filelib:fold_files(Path, ".beam$", true, AddMod, []).
+
+add_module(ModFile, Mods) ->
+    Name = list_to_atom(filename:basename(ModFile, ".beam")),
+    ModInfo = #module{name=Name, path=ModFile, mtime=mtime(ModFile)},
+    [ModInfo|Mods].
+
+mtime(File) ->
+    {ok, FileInfo} = file:read_file_info(File), % R14B compatibility
+    FileInfo#file_info.mtime.
 
 sleep(Time) ->
     receive
@@ -69,14 +128,31 @@ sleep(Time) ->
       ok
     end.
 
-collect_suites(Path) ->
-    AddSuite = fun(A, B) -> add_suite(A, B) end,
-    filelib:fold_files(Path, "_SUITE.erl$", true, AddSuite, []).
+dependencies(SuiteFile) ->
+    {ok, Epp} = epp:open(SuiteFile, []),
+    Forms = get_forms(Epp),
+    ok = epp:close(Epp),
+    parse_dependencies(Forms).
 
-add_suite(SuiteFile, Suites) ->
-    SuiteInfo = {SuiteFile, mtime(SuiteFile)},
-    [SuiteInfo|Suites].
+parse_dependencies(Forms) ->
+    lists:usort(lists:flatten(deps(Forms))).
 
-mtime(File) ->
-    {ok, FileInfo} = file:read_file_info(File), % R14B compatibility
-    FileInfo#file_info.mtime.
+%% Calls
+deps({call, _, {remote,_,{atom,_,Mod}, _}, Args})->
+    [Mod|deps(Args)];
+% Catch all
+deps(List) when is_list(List) ->
+    [deps(F) || F <- List];
+deps(Tuple) when is_tuple(Tuple) ->
+    deps(tuple_to_list(Tuple));
+deps(Any) ->
+    [].
+
+get_forms(Epp) ->
+    case epp:parse_erl_form(Epp) of
+        {eof, _} -> [];
+        {ok, Form} -> [Form|get_forms(Epp)];
+        {error, ErrorInfo} ->
+            io:format("ERROR:~p~n", [ErrorInfo]),
+            get_forms(Epp)
+    end.
